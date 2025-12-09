@@ -9,3 +9,16 @@
     copy:
       src: /root/playbooks/files/haproxy.cfg
       dest: /etc/haproxy
+    register: config
+  - debug:
+      msg: '{{ config }}'
+  - name: Reiniciando o serviço do HAProxy
+    service:
+      name: haproxy
+      state: reloaded
+    when: config.changed
+  - name: Garantido serviço do HAProxy
+    service: # systemd
+      name: haproxy
+      state: started
+      enabled: yes
