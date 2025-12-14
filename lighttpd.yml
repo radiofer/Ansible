@@ -14,9 +14,9 @@
       name: epel-release
       state: present
     when: ansible_distribution|lower == 'centos'
-  - name: Garantindo Lighttpd
+  - name: Garantindo Lighttpd e Git
     package:
-      name: lighttpd
+      name: ['lighttpd', 'git']
       state: present
   - name: Garantindo configurações
     template:
@@ -24,21 +24,83 @@
       dest: /etc/lighttpd
       owner: root
       group: root
+      mode: '0664'
     loop:
       - /root/playbooks/files/mime-types.conf
       - /root/playbooks/files/lighttpd.conf
+    register: config
+  - name: Garantindo configurações de proxy
+    blockinfile:
+      path: /etc/lighttpd/proxy.conf
+      create: yes
+      block: |
+        $SERVER["socket"] == ":8080" {
+            proxy.server = ("" => (( "host" => "192.168.10.10", "port" => "80")))
+        }
+      insertafter: '# Configurações do Ansible'
+    register: proxy
   - name: Garantindo diretórios
     file:
       path: '{{ item }}'
       owner: '{{ user }}'
       group: '{{ group }}'
       state: directory
+      mode: '0750'
     loop:
-      - /svr/www/html
+      - /srv/www/html
       - /var/cache/lighttpd
-      - /var/logs/lighttpd
+      - /var/log/lighttpd
+      - /var/cache/lighttpd/uploads
+      - /var/tmp/lighttpd/cache/compress
+  - name: Reiniciando o lighttpd para aplicar configurações
+    service:
+      name: lighttpd
+      state: restarted
+    when: config.changed or proxy.changed
   - name: Garantindo serviço do lighttpd
     service:
       name: lighttpd
       state: started
       enabled: yes
+  - name: Removendo arquivos de /srv/www/html
+    shell: 'find /srv/www/html/ -delete -mindepth 1'
+#  - name: Configurando Usuario git
+#    become: yes
+#    command: git config --global --add safe.directory '*'
+#  - name: Provisionando site exemplo
+#    git:
+#      repo: https://github.com/4linux/4542-site.git
+#      dest: /srv/www/html
+#      force: yes
+  - name: Corrigir permisões do site
+    file:
+      path: /srv/www/html
+      owner: '{{ user }}'
+      group: '{{ group }}'
+      recurse: yes
+      mode: '0755'
+  - name: Garantindo contexto de /srv/www/html
+    command: 'restorecon -R /srv/www/html'
+    when: ansible_distribution|lower == 'centos'
+#  - get_url:
+#      url: hhtps://github.com/4linux/4542-site/blob/master/index.html
+#      dest: /srv/www/html/index.html
+#      force: yes
+  - name: Copiando site para as máquinas
+    unarchive:
+      src: /root/arquivo.tar.gz
+      dest: /srv/www/html
+      extra_opts: '--strip-components=1'
+      owner: '{{ user }}'
+      group: '{{ group }}'
+  - name: Testando conexão com load balancer
+    uri:
+      url: http://172.27.11.20
+    register: response
+    delegate_to: localhost
+    run_once: yes
+  - name: Verificando status da conexão
+    fail:
+      msg: '[{{ response.status }}] - Load balancer com problemas'
+    run_once: yes
+    when: response.status == 200
